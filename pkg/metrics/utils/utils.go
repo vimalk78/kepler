@@ -151,6 +151,7 @@ func collectEnergy(ch chan<- prometheus.Metric, instance interface{}, metricName
 			for deviceID, utilization := range node.EnergyUsage[metricName] {
 				value = float64(utilization.GetAggr()) / JouleMillijouleConversionFactor
 				labelValues = []string{deviceID, stats.NodeName, mode}
+				klog.V(5).Infof("updatintg node metric %s, value: %f", metricName, value)
 				collect(ch, collector, value, labelValues)
 			}
 		}

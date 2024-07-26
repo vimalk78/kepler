@@ -101,7 +101,7 @@ func (c *Collector) Update() {
 	// collect node power and estimate process power
 	c.UpdateEnergyUtilizationMetrics()
 
-	c.printDebugMetrics()
+	// c.printDebugMetrics()
 	klog.V(5).Infof("Collector Update elapsed time: %s", time.Since(start))
 }
 
@@ -134,6 +134,7 @@ func (c *Collector) UpdateEnergyUtilizationMetrics() {
 // if there is no real-time power meter, use the container's resource usage metrics to estimate the node's resource power
 func (c *Collector) UpdateNodeEnergyUtilizationMetrics() {
 	energy.UpdateNodeEnergyMetrics(&c.NodeStats)
+	klog.V(5).Infof("\n---\nUpdateNodeEnergyUtilizationMetrics: %s\n---\n", &c.NodeStats)
 }
 
 // UpdateProcessEnergyUtilizationMetrics estimates the process energy consumption using its resource utilization and the node components energy consumption
@@ -202,6 +203,7 @@ func (c *Collector) AggregateProcessResourceUtilizationMetrics() {
 				}
 
 				// aggregate metrics from all process to represent the node resource utilization
+				// klog.V(5).Infof("NodeStats.ResourceUsage[%s] add: %d", metricName, delta)
 				c.NodeStats.ResourceUsage[metricName].AddDeltaStat(id, delta)
 			}
 		}

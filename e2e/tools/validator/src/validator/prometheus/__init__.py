@@ -239,8 +239,14 @@ class Comparator:
     ) -> Result:
         expected_series = self.single_series(expected_query, start, end)
         actual_series = self.single_series(actual_query, start, end)
+        print(f"expected_series: {expected_series}")
+        print(f"actual_series: {actual_series}")
+        print("--------------------------\n")
 
         expected, actual = filter_by_equal_timestamps(expected_series, actual_series)
+        print(f"expected: {expected}")
+        print(f"actual: {actual}")
+        print("--------------------------\n")
 
         return Result(
             mse=mse(actual.values, expected.values),

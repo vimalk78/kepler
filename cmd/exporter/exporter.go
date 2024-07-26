@@ -116,6 +116,8 @@ func main() {
 	config.SetEnabledHardwareCounterMetrics(*exposeHardwareCounterMetrics)
 	config.SetEnabledGPU(*enableGPU)
 	config.SetEnabledMSR(*enabledMSR)
+	klog.V(5).Infof("exposeEstimatedIdlePower: %v", exposeEstimatedIdlePower)
+	klog.V(5).Infof("components.IsSystemCollectionSupported(): %v", components.IsSystemCollectionSupported())
 	config.SetEnabledIdlePower(*exposeEstimatedIdlePower || components.IsSystemCollectionSupported())
 
 	config.SetKubeConfig(*kubeconfig)

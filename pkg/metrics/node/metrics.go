@@ -25,6 +25,7 @@ import (
 	"github.com/sustainable-computing-io/kepler/pkg/metrics/utils"
 	"github.com/sustainable-computing-io/kepler/pkg/sensors/components"
 	"github.com/sustainable-computing-io/kepler/pkg/sensors/platform"
+	"k8s.io/klog/v2"
 )
 
 const (
@@ -68,6 +69,11 @@ func (c *collector) initMetrics() {
 	})
 	c.descriptions["info"] = desc
 	c.collectors["info"] = metricfactory.NewPromCounter(desc)
+	for k, v := range c.descriptions {
+		klog.V(5).Infof("Metric Name: %s, Metric Desc: %s", k, v.String())
+	}
+	// b, _ := json.MarshalIndent(c.descriptions, " ", " ")
+	// klog.V(5).Infof("Metrics: \n%s\n", string(b))
 }
 
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {

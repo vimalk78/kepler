@@ -37,6 +37,7 @@ func UpdatePlatformEnergy(nodeStats *stats.NodeStats) {
 		nodePlatformEnergy, _ := platform.GetAbsEnergyFromPlatform()
 		for sourceID, energy := range nodePlatformEnergy {
 			nodeStats.EnergyUsage[config.AbsEnergyInPlatform].SetDeltaStat(sourceID, uint64(energy))
+			klog.V(5).Infof("\n--- UpdatePlatformEnergy. source: %s, energy: %f ---\n", sourceID, energy)
 		}
 	} else if model.IsNodePlatformPowerModelEnabled() {
 		model.UpdateNodePlatformEnergy(nodeStats)

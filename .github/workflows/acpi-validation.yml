@@ -1,0 +1,36 @@
+name: Bare metal validation
+
+on: # yamllint disable-line rule:truthy
+  push:
+    branches: [ acpi-validation-wf ]
+
+jobs:
+  acpi-source-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - name: run make compose target
+        run: |
+          cd ./manifests/compose/mock-acpi/
+          docker compose up -d
+      - name: check the status of Kepler
+        run: |
+          sleep 10
+          curl -G 'http://localhost:9090/api/v1/query' --data-urlencode 'query=kepler_exporter_build_info' | jq
+          curl -G 'http://localhost:9090/api/v1/query' --data-urlencode 'query=kepler_node_info' | jq
+      - name: Install hatch
+        run: |
+          python -m pip install hatch
+      - name: wait for kepler to collect data
+        run: sleep 120
+      - name: run validator to validate mock acpi
+        run: |
+          cd ./e2e/tools/validator
+          hatch run validator -f ./validator.mock-acpi.yaml validate-acpi -d "2m" 
+      - name: get all kepler metrics
+        run: curl -s http://localhost:9188/metrics
+      - name: get kepler_node_platform_joules_total
+        run: |
+          curl -G 'http://localhost:9090/api/v1/query' --data-urlencode 'query=kepler_node_platform_joules_total' | jq
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
