@@ -43,7 +43,7 @@ jobs:
         run: |
           echo $GITHUB_WORKSPACE
           echo "Starting kepler...."
-          nohup sudo -E $GITHUB_WORKSPACE/bin/kepler --log.level=debug --enable.pprof --host.sysfs=/host-sys --host.procfs=/host-proc &
+          nohup sudo -E $GITHUB_WORKSPACE/bin/kepler --log.level=debug --enable.pprof &
           KEPLER_PID=$!
           echo "kepler pid $KEPLER_PID"
           sleep 5
