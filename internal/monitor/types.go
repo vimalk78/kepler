@@ -115,6 +115,8 @@ type Container struct {
 	CPUTotalTime float64 // CPU time in seconds
 
 	Zones ZoneUsageMap
+
+	PodID string
 }
 
 func (c *Container) Clone() *Container {
@@ -125,6 +127,7 @@ func (c *Container) Clone() *Container {
 		CPUTotalTime: c.CPUTotalTime,
 
 		Zones: make(ZoneUsageMap, len(c.Zones)),
+		PodID: c.PodID,
 	}
 	maps.Copy(ret.Zones, c.Zones)
 	return ret
@@ -157,10 +160,34 @@ func (vm *VirtualMachine) Clone() *VirtualMachine {
 	return ret
 }
 
+type Pod struct {
+	ID        string // Pod UUID
+	Name      string // Pod Name
+	Namespace string // Pod Namespace
+
+	CPUTotalTime float64 // CPU time in seconds
+
+	// Replace single Usage with ZoneUsageMap
+	Zones ZoneUsageMap
+}
+
+func (p *Pod) Clone() *Pod {
+	ret := &Pod{
+		ID:           p.ID,
+		Name:         p.Name,
+		Namespace:    p.Namespace,
+		CPUTotalTime: p.CPUTotalTime,
+		Zones:        make(ZoneUsageMap, len(p.Zones)),
+	}
+	maps.Copy(ret.Zones, p.Zones)
+	return ret
+}
+
 type (
 	Processes       = map[int]*Process
 	Containers      = map[string]*Container
 	VirtualMachines = map[string]*VirtualMachine
+	Pods            = map[string]*Pod
 )
 
 // Snapshot encapsulates power monitoring data
@@ -171,6 +198,7 @@ type Snapshot struct {
 	Processes       Processes       // Process power data, keyed by PID
 	Containers      Containers      // Container power data, keyed by container ID
 	VirtualMachines VirtualMachines // VM power data, keyed by container ID
+	Pods            Pods            // Pod power data, keyed by pod ID
 }
 
 // NewSnapshot creates a new Snapshot instance
@@ -183,6 +211,7 @@ func NewSnapshot() *Snapshot {
 		Processes:       make(Processes),
 		Containers:      make(Containers),
 		VirtualMachines: make(VirtualMachines),
+		Pods:            make(Pods),
 	}
 }
 
@@ -193,6 +222,7 @@ func (s *Snapshot) Clone() *Snapshot {
 		Processes:       make(Processes, len(s.Processes)),
 		Containers:      make(Containers, len(s.Containers)),
 		VirtualMachines: make(VirtualMachines, len(s.VirtualMachines)),
+		Pods:            make(Pods, len(s.Pods)),
 	}
 
 	// Deep copy the processes map
@@ -206,6 +236,10 @@ func (s *Snapshot) Clone() *Snapshot {
 
 	for id, src := range s.VirtualMachines {
 		clone.VirtualMachines[id] = src.Clone()
+	}
+
+	for id, src := range s.Pods {
+		clone.Pods[id] = src.Clone()
 	}
 
 	return clone

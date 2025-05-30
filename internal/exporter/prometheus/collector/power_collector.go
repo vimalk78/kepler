@@ -50,6 +50,10 @@ type PowerCollector struct {
 	// Virtual Machine power metrics
 	vmCPUJoulesDescriptor *prometheus.Desc
 	vmCPUWattsDescriptor  *prometheus.Desc
+
+	// Pod power metrics
+	podCPUJoulesDescriptor *prometheus.Desc
+	podCPUWattsDescriptor  *prometheus.Desc
 }
 
 func joulesDesc(level, device string, labels []string) *prometheus.Desc {
@@ -91,10 +95,11 @@ func timeDesc(level, device string, labels []string) *prometheus.Desc {
 // by fetching all data in a single snapshot during collection
 func NewPowerCollector(monitor PowerDataProvider, logger *slog.Logger) *PowerCollector {
 	const (
-		// these labels should rename the same across all descriptors to ease querying
+		// these labels should remain the same across all descriptors to ease querying
 		zone   = "zone"
 		cntrID = "container_id"
 		vmID   = "vm_id"
+		podID  = "pod_id"
 	)
 
 	c := &PowerCollector{
@@ -119,11 +124,14 @@ func NewPowerCollector(monitor PowerDataProvider, logger *slog.Logger) *PowerCol
 		processCPUWattsDescriptor:  wattsDesc("process", "cpu", []string{"pid", "comm", "exe", "type", cntrID, vmID, zone}),
 		processCPUTimeDescriptor:   timeDesc("process", "cpu", []string{"pid", "comm", "exe", "type", cntrID, vmID}),
 
-		containerCPUJoulesDescriptor: joulesDesc("container", "cpu", []string{cntrID, "container_name", "runtime", zone}),
-		containerCPUWattsDescriptor:  wattsDesc("container", "cpu", []string{cntrID, "container_name", "runtime", zone}),
+		containerCPUJoulesDescriptor: joulesDesc("container", "cpu", []string{cntrID, "container_name", "runtime", zone, podID}),
+		containerCPUWattsDescriptor:  wattsDesc("container", "cpu", []string{cntrID, "container_name", "runtime", zone, podID}),
 
 		vmCPUJoulesDescriptor: joulesDesc("vm", "cpu", []string{vmID, "vm_name", "hypervisor", zone}),
 		vmCPUWattsDescriptor:  wattsDesc("vm", "cpu", []string{vmID, "vm_name", "hypervisor", zone}),
+
+		podCPUJoulesDescriptor: joulesDesc("pod", "cpu", []string{podID, "pod_name", "pod_namespace", zone}),
+		podCPUWattsDescriptor:  wattsDesc("pod", "cpu", []string{podID, "pod_name", "pod_namespace", zone}),
 	}
 
 	go c.waitForData()
@@ -164,6 +172,10 @@ func (c *PowerCollector) Describe(ch chan<- *prometheus.Desc) {
 	// vm
 	ch <- c.vmCPUJoulesDescriptor
 	ch <- c.vmCPUWattsDescriptor
+
+	// pod
+	ch <- c.podCPUJoulesDescriptor
+	ch <- c.podCPUWattsDescriptor
 }
 
 func (c *PowerCollector) isReady() bool {
@@ -195,6 +207,7 @@ func (c *PowerCollector) Collect(ch chan<- prometheus.Metric) {
 	c.collectProcessMetrics(ch, snapshot.Processes)
 	c.collectContainerMetrics(ch, snapshot.Containers)
 	c.collectVMMetrics(ch, snapshot.VirtualMachines)
+	c.collectPodMetrics(ch, snapshot.Pods)
 }
 
 // collectNodeMetrics collects node-level power metrics
@@ -316,13 +329,16 @@ func (c *PowerCollector) collectContainerMetrics(ch chan<- prometheus.Metric, co
 				usage.EnergyTotal.Joules(),
 				id, container.Name, string(container.Runtime),
 				zoneName,
+				container.PodID,
 			)
 
 			ch <- prometheus.MustNewConstMetric(
 				c.containerCPUWattsDescriptor,
 				prometheus.GaugeValue,
 				usage.Power.Watts(),
-				id, container.Name, string(container.Runtime), zoneName,
+				id, container.Name, string(container.Runtime),
+				zoneName,
+				container.PodID,
 			)
 		}
 	}
@@ -352,6 +368,35 @@ func (c *PowerCollector) collectVMMetrics(ch chan<- prometheus.Metric, vms monit
 				prometheus.GaugeValue,
 				usage.Power.Watts(),
 				id, vm.Name, string(vm.Hypervisor),
+				zoneName,
+			)
+		}
+	}
+}
+
+func (c *PowerCollector) collectPodMetrics(ch chan<- prometheus.Metric, pods monitor.Pods) {
+	if len(pods) == 0 {
+		c.logger.Debug("No pods to export metrics for")
+		return
+	}
+
+	// No need to lock, already done by the calling function
+	for id, pod := range pods {
+		for zone, usage := range pod.Zones {
+			zoneName := fmt.Sprintf("%s-%d", zone.Name(), zone.Index())
+			ch <- prometheus.MustNewConstMetric(
+				c.podCPUJoulesDescriptor,
+				prometheus.CounterValue,
+				usage.EnergyTotal.Joules(),
+				id, pod.Name, pod.Namespace,
+				zoneName,
+			)
+
+			ch <- prometheus.MustNewConstMetric(
+				c.podCPUWattsDescriptor,
+				prometheus.GaugeValue,
+				usage.Power.Watts(),
+				id, pod.Name, pod.Namespace,
 				zoneName,
 			)
 		}
