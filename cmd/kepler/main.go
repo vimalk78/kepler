@@ -259,13 +259,19 @@ func createCPUMeter(logger *slog.Logger, cfg *config.Config) (device.CPUPowerMet
 		return device.NewFakeCPUMeter(fake.Zones, device.WithFakeLogger(logger))
 	}
 
+	// Create factory for architecture-aware power meter creation
+	factory := device.NewPowerMeterFactory(logger, cfg.Host.SysFS, cfg.Host.ProcFS)
+
+	// Prepare options based on configuration
+	var opts []interface{}
+
+	// Add RAPL options for Intel/AMD systems
 	if len(cfg.Rapl.Zones) > 0 {
 		logger.Info("rapl zones are filtered", "zones-enabled", cfg.Rapl.Zones)
+		opts = append(opts, device.WithZoneFilter(cfg.Rapl.Zones))
 	}
+	opts = append(opts, device.WithRaplLogger(logger))
 
-	return device.NewCPUPowerMeter(
-		cfg.Host.SysFS,
-		device.WithRaplLogger(logger),
-		device.WithZoneFilter(cfg.Rapl.Zones),
-	)
+	// Use factory to create appropriate meter based on detected architecture
+	return factory.CreateCPUPowerMeter(opts...)
 }
