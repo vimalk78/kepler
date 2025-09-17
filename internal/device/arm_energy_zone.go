@@ -231,14 +231,31 @@ func (s *hwmonPowerScanner) ScanPowerSensors() (map[string]string, error) {
 
 	// Scan each hwmon device
 	for _, entry := range entries {
-		fmt.Printf("[DEBUG] hwmonPowerScanner: examining entry: %s (isDir: %v)\n", entry.Name(), entry.IsDir())
+		name := entry.Name()
+		fmt.Printf("[DEBUG] hwmonPowerScanner: examining entry: %s (isDir: %v)\n", name, entry.IsDir())
 
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "hwmon") {
-			fmt.Printf("[DEBUG] hwmonPowerScanner: skipping entry %s (not hwmon directory)\n", entry.Name())
+		// Skip non-hwmon entries
+		if !strings.HasPrefix(name, "hwmon") {
+			fmt.Printf("[DEBUG] hwmonPowerScanner: skipping entry %s (not hwmon named)\n", name)
 			continue
 		}
 
-		hwmonDir := fmt.Sprintf("%s/%s", s.hwmonPath, entry.Name())
+		// Check if entry is a directory or a symlink to a directory
+		fullPath := fmt.Sprintf("%s/%s", s.hwmonPath, name)
+		info, err := os.Stat(fullPath) // Stat follows symlinks
+		if err != nil {
+			fmt.Printf("[DEBUG] hwmonPowerScanner: cannot stat %s: %v\n", fullPath, err)
+			continue
+		}
+
+		if !info.IsDir() {
+			fmt.Printf("[DEBUG] hwmonPowerScanner: skipping entry %s (not a directory after stat)\n", name)
+			continue
+		}
+
+		fmt.Printf("[DEBUG] hwmonPowerScanner: %s is a valid hwmon directory (mode: %v)\n", fullPath, info.Mode())
+
+		hwmonDir := fullPath
 		fmt.Printf("[DEBUG] hwmonPowerScanner: scanning hwmon device: %s\n", hwmonDir)
 
 		// Check for power sensors in this hwmon device
