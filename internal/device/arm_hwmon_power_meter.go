@@ -315,6 +315,19 @@ type hwmonSysfsReader struct {
 // ScanPowerSensors discovers available power sensors in hwmon using sysfs.FS
 func (r hwmonSysfsReader) ScanPowerSensors() (map[string]string, error) {
 	hwmonPath := filepath.Join(r.sysfsPath, "class", "hwmon")
+
+	// Debug logging
+	fmt.Printf("[DEBUG] hwmonSysfsReader: sysfsPath=%s, hwmonPath=%s\n", r.sysfsPath, hwmonPath)
+
 	scanner := NewHwmonPowerScanner(hwmonPath)
-	return scanner.ScanPowerSensors()
+	sensors, err := scanner.ScanPowerSensors()
+
+	// Debug logging
+	if err != nil {
+		fmt.Printf("[DEBUG] hwmonSysfsReader: scan failed with error: %v\n", err)
+	} else {
+		fmt.Printf("[DEBUG] hwmonSysfsReader: found %d sensors: %+v\n", len(sensors), sensors)
+	}
+
+	return sensors, err
 }

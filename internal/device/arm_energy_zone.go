@@ -217,25 +217,39 @@ func NewHwmonPowerScanner(hwmonPath string) *hwmonPowerScanner {
 func (s *hwmonPowerScanner) ScanPowerSensors() (map[string]string, error) {
 	sensors := make(map[string]string)
 
+	// Debug logging
+	fmt.Printf("[DEBUG] hwmonPowerScanner: scanning hwmon path: %s\n", s.hwmonPath)
+
 	// Read hwmon directory
 	entries, err := os.ReadDir(s.hwmonPath)
 	if err != nil {
+		fmt.Printf("[DEBUG] hwmonPowerScanner: failed to read hwmon directory %s: %v\n", s.hwmonPath, err)
 		return nil, fmt.Errorf("failed to read hwmon directory %s: %w", s.hwmonPath, err)
 	}
 
+	fmt.Printf("[DEBUG] hwmonPowerScanner: found %d entries in hwmon directory\n", len(entries))
+
 	// Scan each hwmon device
 	for _, entry := range entries {
+		fmt.Printf("[DEBUG] hwmonPowerScanner: examining entry: %s (isDir: %v)\n", entry.Name(), entry.IsDir())
+
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "hwmon") {
+			fmt.Printf("[DEBUG] hwmonPowerScanner: skipping entry %s (not hwmon directory)\n", entry.Name())
 			continue
 		}
 
 		hwmonDir := fmt.Sprintf("%s/%s", s.hwmonPath, entry.Name())
+		fmt.Printf("[DEBUG] hwmonPowerScanner: scanning hwmon device: %s\n", hwmonDir)
 
 		// Check for power sensors in this hwmon device
 		powerSensors, err := s.scanHwmonDevice(hwmonDir)
 		if err != nil {
-			continue // Skip devices we can't read
+			fmt.Printf("[DEBUG] hwmonPowerScanner: failed to scan device %s: %v\n", hwmonDir, err)
+			// Continue to next device instead of failing completely
+			continue
 		}
+
+		fmt.Printf("[DEBUG] hwmonPowerScanner: found %d power sensors in %s: %+v\n", len(powerSensors), hwmonDir, powerSensors)
 
 		// Add discovered sensors
 		for sensorName, sensorPath := range powerSensors {
@@ -243,6 +257,7 @@ func (s *hwmonPowerScanner) ScanPowerSensors() (map[string]string, error) {
 		}
 	}
 
+	fmt.Printf("[DEBUG] hwmonPowerScanner: total sensors found: %d\n", len(sensors))
 	return sensors, nil
 }
 
@@ -250,19 +265,52 @@ func (s *hwmonPowerScanner) ScanPowerSensors() (map[string]string, error) {
 func (s *hwmonPowerScanner) scanHwmonDevice(hwmonDir string) (map[string]string, error) {
 	sensors := make(map[string]string)
 
+	fmt.Printf("[DEBUG] scanHwmonDevice: scanning device directory: %s\n", hwmonDir)
+
+	// Check if directory exists and is accessible
+	if info, err := os.Stat(hwmonDir); err != nil {
+		fmt.Printf("[DEBUG] scanHwmonDevice: cannot stat directory %s: %v\n", hwmonDir, err)
+		return nil, fmt.Errorf("cannot access hwmon device directory: %w", err)
+	} else {
+		fmt.Printf("[DEBUG] scanHwmonDevice: directory accessible, mode: %v\n", info.Mode())
+	}
+
 	entries, err := os.ReadDir(hwmonDir)
 	if err != nil {
+		fmt.Printf("[DEBUG] scanHwmonDevice: failed to read device directory %s: %v\n", hwmonDir, err)
 		return nil, err
 	}
 
+	fmt.Printf("[DEBUG] scanHwmonDevice: found %d files in device directory\n", len(entries))
+
+	// List all files for debugging
+	var allFiles []string
 	for _, entry := range entries {
+		if !entry.IsDir() {
+			allFiles = append(allFiles, entry.Name())
+		}
+	}
+	fmt.Printf("[DEBUG] scanHwmonDevice: all files in directory: %v\n", allFiles)
+
+	for _, entry := range entries {
+		name := entry.Name()
+		fmt.Printf("[DEBUG] scanHwmonDevice: examining file: %s (isDir: %v)\n", name, entry.IsDir())
+
 		if entry.IsDir() {
 			continue
 		}
 
-		name := entry.Name()
 		if strings.HasPrefix(name, "power") && strings.HasSuffix(name, "_input") {
 			powerPath := fmt.Sprintf("%s/%s", hwmonDir, name)
+			fmt.Printf("[DEBUG] scanHwmonDevice: found power input file: %s\n", powerPath)
+
+			// Test if we can actually read the power file
+			if data, err := os.ReadFile(powerPath); err != nil {
+				fmt.Printf("[DEBUG] scanHwmonDevice: cannot read power file %s: %v\n", powerPath, err)
+				continue
+			} else {
+				fmt.Printf("[DEBUG] scanHwmonDevice: power file readable, sample data: %s\n", strings.TrimSpace(string(data)))
+			}
 
 			// Determine sensor type from label or default naming
 			var sensorName string
@@ -270,6 +318,7 @@ func (s *hwmonPowerScanner) scanHwmonDevice(hwmonDir string) (map[string]string,
 
 			if labelData, err := os.ReadFile(labelPath); err == nil {
 				label := strings.TrimSpace(string(labelData))
+				fmt.Printf("[DEBUG] scanHwmonDevice: read label '%s' from %s\n", label, labelPath)
 				// Map common labels to zone types
 				switch strings.ToLower(label) {
 				case "cpu power":
@@ -287,6 +336,7 @@ func (s *hwmonPowerScanner) scanHwmonDevice(hwmonDir string) (map[string]string,
 					}
 				}
 			} else {
+				fmt.Printf("[DEBUG] scanHwmonDevice: no label file found at %s, using default mapping\n", labelPath)
 				// No label file, use sensor number mapping
 				if strings.Contains(name, "power1") {
 					sensorName = ZonePackage
@@ -297,10 +347,12 @@ func (s *hwmonPowerScanner) scanHwmonDevice(hwmonDir string) (map[string]string,
 				}
 			}
 
+			fmt.Printf("[DEBUG] scanHwmonDevice: mapped %s -> %s (%s)\n", powerPath, sensorName, name)
 			sensors[sensorName] = powerPath
 		}
 	}
 
+	fmt.Printf("[DEBUG] scanHwmonDevice: returning %d sensors from %s\n", len(sensors), hwmonDir)
 	return sensors, nil
 }
 
