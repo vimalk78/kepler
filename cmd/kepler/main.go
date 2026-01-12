@@ -14,6 +14,8 @@ import (
 
 	"github.com/sustainable-computing-io/kepler/config"
 	"github.com/sustainable-computing-io/kepler/internal/device"
+	"github.com/sustainable-computing-io/kepler/internal/device/gpu"
+	"github.com/sustainable-computing-io/kepler/internal/device/gpu/nvidia"
 	"github.com/sustainable-computing-io/kepler/internal/exporter/prometheus"
 	"github.com/sustainable-computing-io/kepler/internal/exporter/stdout"
 	"github.com/sustainable-computing-io/kepler/internal/k8s/pod"
@@ -129,6 +131,10 @@ func createServices(logger *slog.Logger, cfg *config.Config) ([]service.Service,
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CPU power meter: %w", err)
 	}
+
+	// GPU meter is optional - returns nil if not available
+	gpuPowerMeter := createGPUMeter(logger, cfg)
+
 	var services []service.Service
 
 	var podInformer pod.Informer
@@ -149,15 +155,19 @@ func createServices(logger *slog.Logger, cfg *config.Config) ([]service.Service,
 		return nil, fmt.Errorf("failed to create resource informer: %w", err)
 	}
 
-	pm := monitor.NewPowerMonitor(
-		cpuPowerMeter,
+	pmOpts := []monitor.OptionFn{
 		monitor.WithLogger(logger),
 		monitor.WithResourceInformer(resourceInformer),
 		monitor.WithInterval(cfg.Monitor.Interval),
 		monitor.WithMaxStaleness(cfg.Monitor.Staleness),
 		monitor.WithMaxTerminated(cfg.Monitor.MaxTerminated),
-		monitor.WithMinTerminatedEnergyThreshold(monitor.Energy(cfg.Monitor.MinTerminatedEnergyThreshold)*monitor.Joule),
-	)
+		monitor.WithMinTerminatedEnergyThreshold(monitor.Energy(cfg.Monitor.MinTerminatedEnergyThreshold) * monitor.Joule),
+	}
+	if gpuPowerMeter != nil {
+		pmOpts = append(pmOpts, monitor.WithGPUPowerMeter(gpuPowerMeter))
+	}
+
+	pm := monitor.NewPowerMonitor(cpuPowerMeter, pmOpts...)
 
 	// Create Redfish service if enabled (experimental feature)
 
@@ -173,6 +183,11 @@ func createServices(logger *slog.Logger, cfg *config.Config) ([]service.Service,
 		apiServer,
 		pm,
 	)
+
+	// Add GPU meter to services if available (for lifecycle management)
+	if gpuPowerMeter != nil {
+		services = append(services, gpuPowerMeter)
+	}
 
 	// Add Redfish service if enabled
 	var redfishService *redfish.Service
@@ -268,4 +283,21 @@ func createCPUMeter(logger *slog.Logger, cfg *config.Config) (device.CPUPowerMet
 		device.WithRaplLogger(logger),
 		device.WithZoneFilter(cfg.Rapl.Zones),
 	)
+}
+
+// createGPUMeter creates the GPU power meter if enabled in config.
+// Returns nil if GPU is not enabled or not available (soft-fail).
+func createGPUMeter(logger *slog.Logger, cfg *config.Config) gpu.GPUPowerMeter {
+	if !cfg.IsFeatureEnabled(config.GPUNvidiaFeature) {
+		return nil
+	}
+
+	collector := nvidia.NewGPUPowerCollector(nvidia.WithLogger(logger))
+	if err := collector.Init(); err != nil {
+		logger.Warn("NVIDIA GPU not available on this node", "error", err)
+		return nil
+	}
+
+	logger.Info("NVIDIA GPU initialized", "devices", len(collector.Devices()))
+	return collector
 }

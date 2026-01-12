@@ -33,6 +33,9 @@ const (
 
 	// PprofFeature represents the pprof debug endpoints feature
 	PprofFeature Feature = "pprof"
+
+	// GPUNvidiaFeature represents NVIDIA GPU power monitoring
+	GPUNvidiaFeature Feature = "gpu-nvidia"
 )
 
 // Config represents the complete application configuration
@@ -49,6 +52,14 @@ type (
 	// Rapl configuration
 	Rapl struct {
 		Zones []string `yaml:"zones"`
+	}
+
+	// GPU configuration
+	GPUNvidia struct {
+		Enabled *bool `yaml:"enabled"`
+	}
+	GPU struct {
+		NVIDIA GPUNvidia `yaml:"nvidia"`
 	}
 
 	// Development mode settings; disabled by default
@@ -134,6 +145,7 @@ type (
 		Host     Host     `yaml:"host"`
 		Monitor  Monitor  `yaml:"monitor"`
 		Rapl     Rapl     `yaml:"rapl"`
+		GPU      GPU      `yaml:"gpu"`
 		Exporter Exporter `yaml:"exporter"`
 		Web      Web      `yaml:"web"`
 		Debug    Debug    `yaml:"debug"`
@@ -283,6 +295,7 @@ func DefaultConfig() *Config {
 	}
 
 	cfg.Dev.FakeCpuMeter.Enabled = ptr.To(false)
+	cfg.GPU.NVIDIA.Enabled = ptr.To(false)
 	return cfg
 }
 
@@ -562,6 +575,8 @@ func (c *Config) IsFeatureEnabled(feature Feature) bool {
 		return ptr.Deref(c.Exporter.Stdout.Enabled, false)
 	case PprofFeature:
 		return ptr.Deref(c.Debug.Pprof.Enabled, false)
+	case GPUNvidiaFeature:
+		return ptr.Deref(c.GPU.NVIDIA.Enabled, false)
 	default:
 		return false
 	}

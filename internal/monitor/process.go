@@ -83,6 +83,38 @@ func (pm *PowerMonitor) calculateProcessPower(prev, newSnapshot *Snapshot) error
 		pm.terminatedProcessesTracker.Clear()
 	}
 
+	// Get GPU power attribution if GPU meter is available
+	var gpuPowerByPID map[uint32]float64
+	if pm.gpu != nil {
+		var err error
+		gpuPowerByPID, err = pm.gpu.GetProcessPower()
+		if err != nil {
+			pm.logger.Warn("Failed to get GPU process power", "error", err)
+			// Continue without GPU power - don't fail the entire collection
+		}
+		pm.logger.Debug("GPU process power", "gpu_processes", len(gpuPowerByPID), "power_map", gpuPowerByPID)
+
+		// Collect GPU device stats for debugging/monitoring
+		devices := pm.gpu.Devices()
+		gpuStats := make([]GPUDeviceStats, 0, len(devices))
+		for _, dev := range devices {
+			stats, err := pm.gpu.GetDevicePowerStats(dev.Index)
+			if err != nil {
+				pm.logger.Debug("Failed to get GPU device stats", "device", dev.Index, "error", err)
+				continue
+			}
+			gpuStats = append(gpuStats, GPUDeviceStats{
+				DeviceIndex: dev.Index,
+				TotalPower:  stats.TotalPower,
+				IdlePower:   stats.IdlePower,
+				ActivePower: stats.ActivePower,
+			})
+		}
+		newSnapshot.GPUStats = gpuStats
+	} else {
+		pm.logger.Debug("GPU meter not available")
+	}
+
 	procs := pm.resources.Processes()
 
 	pm.logger.Debug("Processing terminated processes", "terminated", len(procs.Terminated))
@@ -142,6 +174,11 @@ func (pm *PowerMonitor) calculateProcessPower(prev, newSnapshot *Snapshot) error
 				Power:       Power(cpuTimeRatio * nodeZoneUsage.ActivePower.MicroWatts()),
 				EnergyTotal: absoluteEnergy,
 			}
+		}
+
+		// Add GPU power attribution if available
+		if gpuPower, hasGPU := gpuPowerByPID[uint32(proc.PID)]; hasGPU {
+			process.GPUPower = gpuPower
 		}
 
 		processMap[process.StringID()] = process

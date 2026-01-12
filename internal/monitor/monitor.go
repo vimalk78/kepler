@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sustainable-computing-io/kepler/internal/device"
+	"github.com/sustainable-computing-io/kepler/internal/device/gpu"
 	"github.com/sustainable-computing-io/kepler/internal/resource"
 	"github.com/sustainable-computing-io/kepler/internal/service"
 	"golang.org/x/sync/singleflight"
@@ -39,6 +40,7 @@ type PowerMonitor struct {
 	// passed externally
 	logger *slog.Logger
 	cpu    device.CPUPowerMeter
+	gpu    gpu.GPUPowerMeter // optional, nil if no GPU available
 
 	interval time.Duration
 	clock    clock.WithTicker
@@ -94,6 +96,7 @@ func NewPowerMonitor(meter device.CPUPowerMeter, applyOpts ...OptionFn) *PowerMo
 	monitor := &PowerMonitor{
 		logger:    opts.logger.With("service", "monitor"),
 		cpu:       meter,
+		gpu:       opts.gpu,
 		clock:     opts.clock,
 		interval:  opts.interval,
 		resources: opts.resources,
