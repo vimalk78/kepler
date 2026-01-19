@@ -83,6 +83,9 @@ spec:
                 fieldRef:
                   apiVersion: v1
                   fieldPath: spec.nodeName
+          {{- with .Values.daemonset.extraEnvs }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- with .Values.daemonset.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

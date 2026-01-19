@@ -149,6 +149,13 @@ func (m *MockDCGMBackend) GetMIGInstanceActivity(gpuIndex int, gpuInstanceID uin
 	return args.Get(0).(float64), args.Error(1)
 }
 
+func (m *MockDCGMBackend) GetMIGInstancesForGPU(gpuIndex int, totalGPUSlices uint) ([]MIGGPUInstance, error) {
+	args := m.Called(gpuIndex, totalGPUSlices)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]MIGGPUInstance), args.Error(1)
+}
 
 // mockSharingModeDetector is a simple mock for the SharingModeDetector interface
 type mockSharingModeDetector struct {

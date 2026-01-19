@@ -350,7 +350,9 @@ func (d *nvmlDevice) IsMIGEnabled() (bool, error) {
 	return currentMode == nvml.DEVICE_MIG_ENABLE, nil
 }
 
-// GetMIGInstances returns all MIG GPU instances on this device
+// GetMIGInstances returns all MIG GPU instances on this device.
+// Uses GetGpuInstances() API which enumerates ALL GPU Instances on the physical GPU,
+// not just those visible to the container.
 func (d *nvmlDevice) GetMIGInstances() ([]MIGInstance, error) {
 	migEnabled, err := d.IsMIGEnabled()
 	if err != nil {
@@ -360,46 +362,54 @@ func (d *nvmlDevice) GetMIGInstances() ([]MIGInstance, error) {
 		return nil, gpu.ErrMIGNotSupported{DeviceIndex: d.index}
 	}
 
-	// Get GPU instances (max 7 for A100)
-	gpuInstances, ret := d.handle.GetMigDeviceHandleByIndex(0)
-	if ret != nvml.SUCCESS {
-		// Try alternative approach - enumerate all possible GPU instances
-		return d.enumerateMIGInstances()
-	}
-
-	// Get info for this GPU instance
-	info, ret := gpuInstances.GetGpuInstanceId()
-	if ret != nvml.SUCCESS {
-		return nil, fmt.Errorf("failed to get GPU instance info: %s", nvml.ErrorString(ret))
-	}
-
-	return []MIGInstance{
-		{
-			GPUInstanceID: uint(info),
-		},
-	}, nil
+	// Always use the full enumeration to get ALL MIG instances
+	return d.enumerateMIGInstances()
 }
 
-// enumerateMIGInstances discovers MIG instances by iterating through possible indices
+// enumerateMIGInstances discovers MIG instances by iterating through GPU instance profiles.
+// This uses GetGpuInstances() which enumerates ALL GPU Instances on the physical GPU,
+// not just those visible to the container (unlike GetMigDeviceHandleByIndex).
 func (d *nvmlDevice) enumerateMIGInstances() ([]MIGInstance, error) {
 	var instances []MIGInstance
+	seenIDs := make(map[uint]bool) // Deduplicate by GPU Instance ID
 
-	// Try to get MIG devices by index (up to 7 for A100)
-	for i := 0; i < 7; i++ {
-		migDevice, ret := d.handle.GetMigDeviceHandleByIndex(i)
+	// Iterate through all possible profile types (0-14 covers standard profiles)
+	// Profile IDs: 0=1g.5gb, 1=2g.10gb, 2=3g.20gb, 3=4g.20gb, 4=7g.40gb, etc.
+	// We iterate until we get INVALID_ARGUMENT which means no more profiles
+	for profileID := 0; profileID < 15; profileID++ {
+		profileInfo, ret := d.handle.GetGpuInstanceProfileInfo(profileID)
+		if ret == nvml.ERROR_INVALID_ARGUMENT || ret == nvml.ERROR_NOT_SUPPORTED {
+			// No more profiles or profile not supported on this GPU
+			continue
+		}
 		if ret != nvml.SUCCESS {
 			continue
 		}
 
-		giID, ret := migDevice.GetGpuInstanceId()
+		// Get all GPU instances for this profile type
+		gpuInstances, ret := d.handle.GetGpuInstances(&profileInfo)
 		if ret != nvml.SUCCESS {
 			continue
 		}
 
-		instances = append(instances, MIGInstance{
-			GPUInstanceID: uint(giID),
-			EntityID:      uint(i),
-		})
+		for _, gi := range gpuInstances {
+			info, ret := gi.GetInfo()
+			if ret != nvml.SUCCESS {
+				continue
+			}
+
+			// Deduplicate (same instance might appear in multiple profile queries)
+			if seenIDs[uint(info.Id)] {
+				continue
+			}
+			seenIDs[uint(info.Id)] = true
+
+			instances = append(instances, MIGInstance{
+				GPUInstanceID: uint(info.Id),
+				EntityID:      uint(info.Id), // Use GPU Instance ID as entity ID
+				ProfileSlices: uint(profileInfo.SliceCount),
+			})
+		}
 	}
 
 	if len(instances) == 0 {
@@ -412,6 +422,9 @@ func (d *nvmlDevice) enumerateMIGInstances() ([]MIGInstance, error) {
 // GetMIGDeviceByInstanceID returns a MIG device by its GPU Instance ID.
 // The returned NVMLDevice can be used to call GetProcessUtilization() for
 // processes running within this specific MIG instance.
+//
+// This uses the GPU Instance API to find the instance, then gets its compute
+// instances to access the MIG device handle.
 func (d *nvmlDevice) GetMIGDeviceByInstanceID(gpuInstanceID uint) (NVMLDevice, error) {
 	migEnabled, err := d.IsMIGEnabled()
 	if err != nil {
@@ -421,8 +434,14 @@ func (d *nvmlDevice) GetMIGDeviceByInstanceID(gpuInstanceID uint) (NVMLDevice, e
 		return nil, gpu.ErrMIGNotSupported{DeviceIndex: d.index}
 	}
 
-	// Iterate through MIG devices to find the one with matching GPU Instance ID
-	for i := 0; i < 7; i++ {
+	// Iterate through all visible MIG devices to find one that matches this GPU Instance ID
+	// GetMigDeviceHandleByIndex uses sequential indices, so we need to check each one
+	maxMigDevices, ret := d.handle.GetMaxMigDeviceCount()
+	if ret != nvml.SUCCESS || maxMigDevices == 0 {
+		maxMigDevices = 14 // Reasonable default for H100/A100
+	}
+
+	for i := 0; i < maxMigDevices; i++ {
 		migHandle, ret := d.handle.GetMigDeviceHandleByIndex(i)
 		if ret != nvml.SUCCESS {
 			continue
@@ -441,7 +460,7 @@ func (d *nvmlDevice) GetMIGDeviceByInstanceID(gpuInstanceID uint) (NVMLDevice, e
 			}
 
 			return &nvmlDevice{
-				index:  d.index, // Parent GPU index
+				index:  d.index,
 				handle: migHandle,
 				uuid:   uuid,
 				name:   name,
@@ -449,7 +468,7 @@ func (d *nvmlDevice) GetMIGDeviceByInstanceID(gpuInstanceID uint) (NVMLDevice, e
 		}
 	}
 
-	return nil, fmt.Errorf("MIG instance with GPU Instance ID %d not found", gpuInstanceID)
+	return nil, fmt.Errorf("MIG device for GPU Instance ID %d not found", gpuInstanceID)
 }
 
 // GetMaxMigDeviceCount returns the maximum number of MIG devices (slices) for this GPU.

@@ -534,6 +534,11 @@ func (c *GPUPowerCollector) attributeMIGPower(deviceIndex int) (map[uint32]float
 
 	// Use cached MIG hierarchy from NVML (static, enumerated at startup)
 	instances := c.migInstancesByDevice[deviceIndex]
+	c.logger.Debug("attributeMIGPower starting",
+		"device", deviceIndex,
+		"cached_instances", len(instances),
+		"dcgm_initialized", c.dcgm.IsInitialized())
+
 	if !c.dcgm.IsInitialized() || len(instances) == 0 {
 		c.logger.Debug("DCGM not available or no MIG instances, using fallback",
 			"dcgm_initialized", c.dcgm.IsInitialized(),
@@ -552,8 +557,17 @@ func (c *GPUPowerCollector) attributeMIGPower(deviceIndex int) (map[uint32]float
 	for _, gi := range instances {
 		activity, err := c.dcgm.GetMIGInstanceActivity(deviceIndex, gi.GPUInstanceID)
 		if err != nil {
+			c.logger.Debug("GetMIGInstanceActivity failed",
+				"device", deviceIndex,
+				"gpuInstanceID", gi.GPUInstanceID,
+				"error", err)
 			continue
 		}
+
+		c.logger.Debug("MIG instance activity",
+			"device", deviceIndex,
+			"gpuInstanceID", gi.GPUInstanceID,
+			"activity", activity)
 
 		// Skip NVML calls for idle MIG instances (major optimization)
 		// Activity from dcgm-exporter is cached and cheap to query.
@@ -564,6 +578,10 @@ func (c *GPUPowerCollector) attributeMIGPower(deviceIndex int) (map[uint32]float
 
 		migDevice, err := dev.GetMIGDeviceByInstanceID(gi.GPUInstanceID)
 		if err != nil {
+			c.logger.Debug("GetMIGDeviceByInstanceID failed",
+				"device", deviceIndex,
+				"gpuInstanceID", gi.GPUInstanceID,
+				"error", err)
 			continue
 		}
 

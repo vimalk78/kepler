@@ -65,6 +65,14 @@ daemonset:
 
   readinessProbe: {}
 
+  # Extra environment variables for the kepler container
+  # NVIDIA MIG monitoring requires these env vars to see all MIG instances
+  extraEnvs:
+    - name: NVIDIA_VISIBLE_DEVICES
+      value: "all"
+    - name: NVIDIA_MIG_MONITOR_DEVICES
+      value: "all"
+
 config:
   log:
     level: debug
