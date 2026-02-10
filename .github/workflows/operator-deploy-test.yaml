@@ -1,0 +1,214 @@
+name: Operator Deploy Test
+
+on: # yamllint disable-line rule:truthy
+  pull_request:
+  workflow_dispatch:
+
+# default permissions as read only
+permissions: read-all
+
+jobs:
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+    steps:
+      - name: checkout source
+        uses: actions/checkout@v6
+
+      - name: filter changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            k8s_changes:
+              - 'internal/k8s/**'
+              - 'manifests/k8s/rbac.yaml'
+              - 'manifests/helm/kepler/templates/rbac.yaml'
+              - 'go.mod'
+              - 'go.sum'
+              - 'cmd/**/*.go'
+              - '.github/workflows/operator-deploy-test.yaml'
+
+      - name: decide whether to run
+        id: decide
+        run: |
+          if [[ "${{ steps.filter.outputs.k8s_changes }}" == "true" ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ contains(github.event.pull_request.labels.*.name, 'test/operator-deploy') }}" == "true" ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  operator-deploy-test:
+    needs: [check-changes]
+    if: needs.check-changes.outputs.should_run == 'true' && github.repository_owner == 'sustainable-computing-io'
+    runs-on: self-hosted
+    continue-on-error: true
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6.2.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build kepler image
+        shell: bash
+        run: |
+          make image
+        env:
+          IMG_BASE: localhost:5001
+          VERSION: dev
+
+      - name: Setup Kind cluster
+        shell: bash
+        run: |
+          make cluster-up
+
+      - name: Push kepler image
+        shell: bash
+        run: |
+          make push
+        env:
+          IMG_BASE: localhost:5001
+          VERSION: dev
+
+      - name: Install cert-manager
+        shell: bash
+        run: |
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+          echo "Waiting for cert-manager to be ready..."
+          kubectl wait --for=condition=Available deployment --all -n cert-manager --timeout=3m
+
+      - name: Install kepler-operator via Helm
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/sustainable-computing-io/kepler-operator.git /tmp/kepler-operator
+
+          helm install kepler-operator /tmp/kepler-operator/manifests/helm/kepler-operator \
+            --namespace kepler-operator --create-namespace \
+            --set kepler.image=localhost:5001/kepler:dev \
+            --wait --timeout 3m
+
+          echo "Waiting for operator to be ready..."
+          kubectl wait --for=condition=Available deployment -l app.kubernetes.io/component=manager \
+            -n kepler-operator --timeout=3m
+
+      - name: Create PowerMonitor CR
+        shell: bash
+        run: |
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: kepler.system.sustainable.computing.io/v1alpha1
+          kind: PowerMonitor
+          metadata:
+            name: power-monitor
+          spec:
+            kepler: {}
+          EOF
+
+      - name: Wait for kepler DaemonSet rollout
+        shell: bash
+        run: |
+          echo "Waiting for operator to create DaemonSet..."
+          for i in $(seq 1 30); do
+            if kubectl get daemonset power-monitor -n power-monitor 2>/dev/null; then
+              break
+            fi
+            echo "Attempt $i/30: DaemonSet not found yet, waiting..."
+            sleep 10
+          done
+
+          kubectl rollout status daemonset/power-monitor -n power-monitor --timeout=5m
+
+      - name: Verify kepler pods are running
+        shell: bash
+        run: |
+          echo "Checking pod status..."
+          kubectl get pods -n power-monitor -o wide
+
+          # Verify at least one pod is Running
+          running=$(kubectl get pods -n power-monitor -l app.kubernetes.io/name=power-monitor-exporter \
+            --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l)
+          if [ "$running" -eq 0 ]; then
+            echo "ERROR: No kepler pods in Running state"
+            kubectl describe pods -n power-monitor
+            exit 1
+          fi
+          echo "SUCCESS: $running kepler pod(s) running"
+
+      - name: Check metrics endpoint
+        shell: bash
+        run: |
+          kubectl port-forward -n power-monitor daemonset/power-monitor 28282:28282 &
+          PF_PID=$!
+          sleep 5
+
+          if curl -sf http://localhost:28282/metrics | head -5; then
+            echo "SUCCESS: Metrics endpoint is responding"
+          else
+            echo "WARNING: Metrics endpoint not responding (may be expected without RAPL)"
+          fi
+
+          kill $PF_PID 2>/dev/null || true
+
+      - name: Must gather (operator deploy test)
+        if: always()
+        shell: bash
+        run: |
+          echo "::group::PowerMonitor CR status"
+          kubectl get powermonitor power-monitor -o yaml 2>/dev/null || true
+          echo "::endgroup::"
+
+          echo "::group::Pods in power-monitor namespace"
+          kubectl get pods -n power-monitor -o wide 2>/dev/null || true
+          echo "::endgroup::"
+
+          echo "::group::Kepler pod logs (operator-deployed)"
+          kubectl logs daemonset/power-monitor -n power-monitor --tail=50 2>/dev/null || true
+          echo "::endgroup::"
+
+          echo "::group::Operator pods"
+          kubectl get pods -n kepler-operator -o wide 2>/dev/null || true
+          echo "::endgroup::"
+
+          echo "::group::Operator logs"
+          kubectl logs deployment/kepler-operator-controller -n kepler-operator --tail=50 2>/dev/null || true
+          echo "::endgroup::"
+
+          echo "::group::ClusterRole created by operator"
+          kubectl get clusterrole power-monitor -o yaml 2>/dev/null || true
+          echo "::endgroup::"
+
+          echo "::group::Events in power-monitor namespace"
+          kubectl get events -n power-monitor --sort-by='.lastTimestamp' 2>/dev/null || true
+          echo "::endgroup::"
+
+      - name: Cleanup operator deployment
+        if: always()
+        shell: bash
+        run: |
+          kubectl delete powermonitor power-monitor --ignore-not-found=true 2>/dev/null || true
+          helm uninstall kepler-operator -n kepler-operator 2>/dev/null || true
+          kubectl delete namespace power-monitor --ignore-not-found=true 2>/dev/null || true
+          kubectl delete namespace kepler-operator --ignore-not-found=true 2>/dev/null || true
+          kubectl delete -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml 2>/dev/null || true
+          rm -rf /tmp/kepler-operator
+
+      - name: Remove kind cluster
+        if: always()
+        shell: bash
+        run: |
+          make cluster-down
+
+      - name: Clean Docker images
+        if: always()
+        shell: bash
+        run: |
+          docker image prune -af
